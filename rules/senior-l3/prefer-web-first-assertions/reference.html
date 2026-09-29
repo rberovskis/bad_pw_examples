@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>prefer-web-first-assertions · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Assertion Correctness</p>
+    <h1>prefer-web-first-assertions</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Auto-Retry</span>
+      <span class="tag">Point-in-time vs Polling</span>
+      <span class="tag">Reliability</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    Playwright's locator methods like <code>isVisible()</code>, <code>isEnabled()</code>, and <code>innerText()</code> are point-in-time snapshot calls — they resolve the DOM state at the instant <code>await</code> is hit and return a plain value immediately, with no retry logic. If the UI is mid-transition (e.g. an element is being rendered after an async data fetch), the assertion fires against a stale or absent element and fails flakily. Web-first assertions like <code>toBeVisible()</code> and <code>toHaveText()</code> are built into Playwright's <code>expect</code> engine, which polls the condition on a configurable timeout (default 5 seconds), retrying until it passes or times out — making the test wait for the application to reach the expected state rather than racing against it.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate understands the distinction between <strong>action methods that return values</strong> (point-in-time) versus <strong>web-first assertions that are built on Playwright's retry-assertion engine</strong> — and can explain <em>why</em> the latter is more reliable in async UIs.</li>
+    <li>The candidate can articulate which web-first assertion maps to which instance method (e.g. <code>isVisible()</code> → <code>toBeVisible()</code>, <code>innerText()</code> → <code>toHaveText()</code>, <code>getAttribute()</code> → <code>toHaveAttribute()</code>).</li>
+    <li>The candidate recognizes that wrapping a point-in-time call in a custom retry loop is an anti-pattern that reimplements logic Playwright already provides, and that web-first assertions integrate cleanly with <code>expect.configure</code> timeout and soft-assertion APIs.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Snapshot check after form submission
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'shows success banner after login'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'hunter2'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="cm">// Point-in-time — resolves before the redirect animation completes</span></span>
+<span class="err-line">  <span class="kw">const</span> bannerVisible = <span class="kw">await</span> page.<span class="fn">locator</span>(<span class="str">'[data-testid="success-banner"]'</span>).<span class="fn">isVisible</span>();</span>
+<span class="err-line">  <span class="fn">expect</span>(bannerVisible).<span class="fn">toBe</span>(<span class="kw">true</span>);</span>
+
+<span class="err-line">  <span class="kw">const</span> welcomeText = <span class="kw">await</span> page.<span class="fn">locator</span>(<span class="str">'[data-testid="success-banner"]'</span>).<span class="fn">innerText</span>();</span>
+<span class="err-line">  <span class="fn">expect</span>(welcomeText).<span class="fn">toBe</span>(<span class="str">'Welcome back, user@example.com'</span>);</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>isVisible()</code> and <code>innerText()</code> are called immediately after the button click. If the server response or client-side render takes even a few hundred milliseconds, both calls read a stale DOM and the test fails intermittently without any useful error message pointing to the timing issue.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Attribute check on a dynamically populated element
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'submit button is disabled while request is in flight'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place order'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="cm">// Snapshot — likely fires before the async state update</span></span>
+<span class="err-line">  <span class="kw">const</span> isDisabled = <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place order'</span> }).<span class="fn">isDisabled</span>();</span>
+<span class="err-line">  <span class="fn">expect</span>(isDisabled).<span class="fn">toBe</span>(<span class="kw">true</span>);</span>
+
+<span class="err-line">  <span class="kw">const</span> loadingAttr = <span class="kw">await</span> page</span>
+<span class="err-line">    .<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place order'</span> })</span>
+<span class="err-line">    .<span class="fn">getAttribute</span>(<span class="str">'data-loading'</span>);</span>
+<span class="err-line">  <span class="fn">expect</span>(loadingAttr).<span class="fn">toBe</span>(<span class="str">'true'</span>);</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> The disabled state and <code>data-loading</code> attribute are set asynchronously by the click handler. Both <code>isDisabled()</code> and <code>getAttribute()</code> snapshot the element at the instant they execute — likely before the state has been applied — so the assertions pass only when the machine is slow enough and fail on fast CI runners.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Web-first assertions after login
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'shows success banner after login'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'hunter2'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+  <span class="kw">const</span> banner = page.<span class="fn">locator</span>(<span class="str">'[data-testid="success-banner"]'</span>);
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(banner).<span class="fn">toBeVisible</span>(); <span class="cm">// polls until visible or timeout</span></span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(banner).<span class="fn">toHaveText</span>(<span class="str">'Welcome back, user@example.com'</span>);</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>toBeVisible()</code> and <code>toHaveText()</code> both use Playwright's built-in retry-assertion loop, polling until the banner appears and contains the expected text or the configured timeout expires. The test is immune to render delays and produces a clear timeout message if it fails.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Attribute assertion on a loading state
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'submit button reflects loading state during order placement'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+
+  <span class="kw">const</span> submitBtn = page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place order'</span> });
+  <span class="kw">await</span> submitBtn.<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="cm">// Polls for attribute and disabled state — survives async state updates</span></span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(submitBtn).<span class="fn">toHaveAttribute</span>(<span class="str">'data-loading'</span>, <span class="str">'true'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(submitBtn).<span class="fn">toBeDisabled</span>();</span>
+
+<span class="ok-line">  <span class="cm">// Once the request resolves the button should recover</span></span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(submitBtn).<span class="fn">toBeEnabled</span>({ timeout: <span class="num">10_000</span> });</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>toHaveAttribute()</code> and <code>toBeDisabled()</code>/<code>toBeEnabled()</code> are web-first assertions that poll the element, correctly capturing transient loading states without manual waits. Per-assertion timeouts let you tune retries for slow network conditions without changing the global config.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"If <code>isVisible()</code> is just a boolean and I <code>await</code> it, isn't that functionally the same as <code>toBeVisible()</code> since both are async?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p><code>await</code> on <code>isVisible()</code> simply waits for the JavaScript microtask that resolves the locator's DOM query at that instant — <strong>there is no retry loop</strong>. <code>toBeVisible()</code> wraps the check in <code>expect</code>'s polling engine, which re-evaluates the condition on a configurable interval until it passes or times out. The <code>await</code> keyword is syntactically similar but semantically very different in what it waits for.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe that adding <code>await</code> before any Playwright call makes it "automatically wait for the element." They conflate <code>await</code>ing a promise (waiting for a single async operation to complete) with Playwright's auto-waiting and retry-assertion mechanism, which actively re-polls the DOM over time. They may also assume that if the test passes locally it is reliable, not realizing that point-in-time checks only appear stable because local machines are fast and render synchronously under low load.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../prefer-ending-with-an-expect/reference.html">prefer-ending-with-an-expect</a>
+    <a class="nav-link" href="../require-soft-assertions/reference.html">require-soft-assertions →</a>
+  </nav>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>no-conditional-expect · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Assertion Correctness</p>
+    <h1>no-conditional-expect</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Assertion Correctness</span>
+      <span class="tag">Silent Skip</span>
+      <span class="tag">False Positive</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    Playwright marks a test as failed only when an unhandled exception propagates out of the test function. When <code>expect</code> is placed inside an <code>if</code> block or a <code>catch</code>/<code>.catch()</code> handler, the assertion can be silently skipped — for example when the condition is never true or the promise never rejects — and the test exits cleanly with a passing status even though nothing was actually verified. This produces a false-green: CI stays green, the feature ships, and the regression is discovered only in production.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate can explain <strong>why the test passes silently</strong>: Playwright's test runner treats a test as passing when the test function resolves without throwing, so an <code>expect</code> that is never reached never throws, and no failure is recorded.</li>
+    <li>The candidate understands the <strong><code>.catch()</code> pattern as a special case</strong>: wrapping an assertion in a <code>.catch()</code> callback is semantically equivalent to putting it inside a <code>catch</code> block — if the awaited expression never rejects, the callback is never invoked.</li>
+    <li>The candidate can articulate <strong>idiomatic alternatives</strong>: using <code>await expect(fn).rejects.toThrow()</code> for rejection checks, or a <code>getError</code> wrapper utility that converts a non-throw into a deliberate <code>NoErrorThrownError</code>.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Feature-flag guard around checkout assertions
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'checkout form submits successfully for eligible users'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Card number'</span>).<span class="fn">fill</span>(<span class="str">'4111111111111111'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Expiry'</span>).<span class="fn">fill</span>(<span class="str">'12/28'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'CVV'</span>).<span class="fn">fill</span>(<span class="str">'123'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Pay now'</span> }).<span class="fn">click</span>();
+
+  <span class="kw">const</span> isNewCheckout = <span class="kw">await</span> page.<span class="fn">evaluate</span>(() =&gt; window.__featureFlags?.newCheckout);
+
+<span class="err-line">  <span class="kw">if</span> (isNewCheckout) {  <span class="cm">// if flag is off, both expects are silently skipped</span></span>
+<span class="err-line">    <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'order-confirmation'</span>)).<span class="fn">toBeVisible</span>();</span>
+<span class="err-line">    <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">'Your order has been placed'</span>)).<span class="fn">toBeVisible</span>();</span>
+<span class="err-line">  }</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> If the <code>newCheckout</code> feature flag is off (or the property is absent), the <code>if</code> branch is never entered and both <code>expect</code> calls are silently skipped — the test exits green without verifying anything. A regression that removes the confirmation screen entirely would not be caught.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Swallowing an API error inside <code>.catch()</code>
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'displays error banner when payment API returns 402'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">route</span>(<span class="str">'**/api/payments'</span>, (route) =&gt;
+    route.<span class="fn">fulfill</span>({ status: <span class="num">402</span>, body: <span class="tp">JSON</span>.<span class="fn">stringify</span>({ message: <span class="str">'Insufficient funds'</span> }) })
+  );
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Pay now'</span> }).<span class="fn">click</span>();
+
+  <span class="kw">const</span> responsePromise = page.<span class="fn">waitForResponse</span>(<span class="str">'**/api/payments'</span>);
+
+<span class="err-line">  <span class="cm">// waitForResponse resolves (route is fulfilled) — .catch() is never called</span></span>
+<span class="err-line">  <span class="kw">await</span> responsePromise</span>
+<span class="err-line">    .<span class="fn">then</span>((res) =&gt; res.<span class="fn">json</span>())</span>
+<span class="err-line">    .<span class="fn">catch</span>((error) =&gt; {</span>
+<span class="err-line">      <span class="fn">expect</span>(error).<span class="fn">toMatchObject</span>({ message: <span class="str">'Insufficient funds'</span> });</span>
+<span class="err-line">      <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'alert'</span>)).<span class="fn">toBeVisible</span>();</span>
+<span class="err-line">    });</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> If <code>waitForResponse</code> resolves successfully (which it will — the route is fulfilled), the <code>.catch()</code> callback is never invoked. Both <code>expect</code> calls are silently dropped and the test passes without ever checking that the error banner renders.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Unconditional assertions with per-environment setup
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'checkout form submits successfully'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+<span class="ok-line">  <span class="cm">// Seed the flag unconditionally so the test always exercises one code path</span></span>
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">addInitScript</span>(() =&gt; {</span>
+<span class="ok-line">    window.__featureFlags = { ...(window.__featureFlags ?? {}), newCheckout: <span class="kw">true</span> };</span>
+<span class="ok-line">  });</span>
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Card number'</span>).<span class="fn">fill</span>(<span class="str">'4111111111111111'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Expiry'</span>).<span class="fn">fill</span>(<span class="str">'12/28'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'CVV'</span>).<span class="fn">fill</span>(<span class="str">'123'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Pay now'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'order-confirmation'</span>)).<span class="fn">toBeVisible</span>();</span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">'Your order has been placed'</span>)).<span class="fn">toBeVisible</span>();</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The flag is seeded unconditionally before the page loads, so the assertions are always reached and the test has a single, well-defined code path. If the confirmation screen disappears the test fails loudly.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Separating UI assertion from error-shape concern
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">class</span> <span class="tp">NoErrorThrownError</span> <span class="kw">extends</span> <span class="tp">Error</span> {
+  <span class="fn">constructor</span>() {
+    <span class="kw">super</span>(<span class="str">'Expected the async call to throw, but it resolved successfully.'</span>);
+  }
+}
+
+<span class="kw">async function</span> <span class="fn">getError</span>&lt;<span class="tp">TError</span>&gt;(call: () =&gt; <span class="tp">Promise</span>&lt;unknown&gt;): <span class="tp">Promise</span>&lt;<span class="tp">TError</span>&gt; {
+  <span class="kw">try</span> {
+    <span class="kw">await</span> <span class="fn">call</span>();
+    <span class="kw">throw new</span> <span class="tp">NoErrorThrownError</span>();
+  } <span class="kw">catch</span> (error: unknown) {
+    <span class="kw">return</span> error <span class="kw">as</span> <span class="tp">TError</span>;
+  }
+}
+
+test(<span class="str">'displays error banner when payment API returns 402'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">route</span>(<span class="str">'**/api/payments'</span>, (route) =&gt;
+    route.<span class="fn">fulfill</span>({ status: <span class="num">402</span>, body: <span class="tp">JSON</span>.<span class="fn">stringify</span>({ message: <span class="str">'Insufficient funds'</span> }) })
+  );
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Pay now'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="cm">// Unconditional UI assertions — no conditional needed</span></span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'alert'</span>)).<span class="fn">toBeVisible</span>();</span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">'Insufficient funds'</span>)).<span class="fn">toBeVisible</span>();</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The UI-level test uses unconditional assertions against the rendered page. Error-shape concerns can be moved to a focused unit test that uses the <code>getError</code> wrapper. If the function never throws, <code>NoErrorThrownError</code> propagates out and the test fails explicitly rather than silently passing.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"We have a test that checks an error modal only when a specific API call fails. The test has been green in CI for months. How would you determine whether the test is actually providing coverage?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>A consistently green test for an error path is a red flag — it may mean the unhappy path is never actually triggered. The fix: add a deliberate route interception (<code>page.route</code>) to force the API failure, remove any conditional guard around the <code>expect</code>, and introduce a negative assertion to ensure the test fails when the error does <em>not</em> occur. Mention <code>expect.assertions(n)</code> patterns from Jest/Vitest as analogous context, even though Playwright does not natively support it, to demonstrate understanding of the underlying problem of unverified assertion counts.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe the test is "safe" because it will still fail if the assertion <em>is</em> reached and the value is wrong — they miss the silent skip scenario entirely. They conflate "the assertion is correct when it runs" with "the assertion always runs," and therefore see no issue with wrapping <code>expect</code> in a conditional as a form of defensive coding.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../no-wait-for-timeout/reference.html">no-wait-for-timeout</a>
+    <a class="nav-link" href="../prefer-ending-with-an-expect/reference.html">prefer-ending-with-an-expect →</a>
+  </nav>
+
+</div>
+</body>
+</html>

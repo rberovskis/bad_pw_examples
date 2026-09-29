@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>no-unsafe-references · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Browser/Node Context Boundary</p>
+    <h1>no-unsafe-references</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Context Boundary</span>
+      <span class="tag">Closure Serialization</span>
+      <span class="tag">page.evaluate</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    <code>page.evaluate()</code> and <code>page.addInitScript()</code> execute their callback inside the browser's JavaScript engine — a completely separate V8 context from the Node.js process running your test. Variables captured via closure in the parent scope are not automatically serialized and transferred. The browser context has no reference to them, so accessing them silently yields <code>undefined</code> or throws a <code>ReferenceError</code> at runtime. The only supported way to pass data across this context boundary is through Playwright's explicit argument channel, which serializes values (via structured clone) and injects them as parameters into the browser-side function.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate understands the <strong>two-context model</strong>: Node.js test process vs. browser page, and that closures do not cross that boundary regardless of how the code reads syntactically.</li>
+    <li>The candidate can explain <strong>why the failure is silent</strong> — the code often runs without throwing because <code>undefined</code> arithmetic or comparisons don't always crash, making bugs hard to diagnose.</li>
+    <li>The candidate knows the <strong>serialization constraint</strong>: only structured-cloneable values (plain objects, arrays, primitives) can be passed as arguments, so DOM nodes, functions, and class instances with methods cannot cross the boundary even with the correct argument-passing pattern.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Token injected into localStorage via closure
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'persists auth token across page reload'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">const</span> authToken = <span class="str">'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test'</span>;
+  <span class="kw">const</span> storageKey = <span class="str">'auth_token'</span>;
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+  <span class="kw">await</span> page.<span class="fn">addInitScript</span>(() =&gt; {
+<span class="err-line">    <span class="cm">// BUG: storageKey and authToken are Node.js scope — browser sees undefined</span></span>
+<span class="err-line">    localStorage.<span class="fn">setItem</span>(storageKey, authToken); <span class="cm">// actually: setItem('undefined', 'undefined')</span></span>
+  });
+
+  <span class="kw">await</span> page.<span class="fn">reload</span>();
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Dashboard'</span> })).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>storageKey</code> and <code>authToken</code> are Node.js-scope variables captured by closure. Inside the browser context, both resolve to <code>undefined</code>, so <code>localStorage.setItem('undefined', 'undefined')</code> is called — the app never receives a valid token and the test fails or produces a false negative with no obvious error message.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Feature flag object read inside evaluate
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'renders premium features for paid plan'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">const</span> planConfig = { tier: <span class="str">'premium'</span>, maxSeats: <span class="num">50</span>, analyticsEnabled: <span class="kw">true</span> };
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/dashboard'</span>);
+
+  <span class="kw">const</span> flagValue = <span class="kw">await</span> page.<span class="fn">evaluate</span>(() =&gt; {
+<span class="err-line">    <span class="cm">// planConfig is not in scope — browser throws ReferenceError silently</span></span>
+<span class="err-line">    <span class="kw">return</span> window.__APP_CONFIG__.tier === planConfig.tier;</span>
+  });
+
+  <span class="fn">expect</span>(flagValue).<span class="fn">toBe</span>(<span class="kw">true</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>planConfig</code> lives in the Node.js process. Inside <code>page.evaluate</code>, it is not in scope — the browser engine has no closure over Node.js variables — so <code>planConfig</code> is a <code>ReferenceError</code> at runtime. The comparison never executes.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Token passed as argument to addInitScript
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'persists auth token across page reload'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">const</span> authToken = <span class="str">'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test'</span>;
+  <span class="kw">const</span> storageKey = <span class="str">'auth_token'</span>;
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">addInitScript</span>(</span>
+<span class="ok-line">    ([key, token]) =&gt; {</span>
+<span class="ok-line">      localStorage.<span class="fn">setItem</span>(key, token); <span class="cm">// receives real string values</span></span>
+<span class="ok-line">    },</span>
+<span class="ok-line">    [storageKey, authToken] <span class="cm">// serialized via structured clone</span></span>
+<span class="ok-line">  );</span>
+
+  <span class="kw">await</span> page.<span class="fn">reload</span>();
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Dashboard'</span> })).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>storageKey</code> and <code>authToken</code> are passed as the second argument to <code>addInitScript</code>, which Playwright serializes and delivers to the browser context as destructured parameters. The browser-side function receives real string values and <code>localStorage.setItem</code> behaves correctly.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Config object passed as argument to evaluate
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'renders premium features for paid plan'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">const</span> planConfig = { tier: <span class="str">'premium'</span>, maxSeats: <span class="num">50</span>, analyticsEnabled: <span class="kw">true</span> };
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/dashboard'</span>);
+
+<span class="ok-line">  <span class="kw">const</span> flagValue = <span class="kw">await</span> page.<span class="fn">evaluate</span>((config) =&gt; {</span>
+<span class="ok-line">    <span class="kw">return</span> window.__APP_CONFIG__.tier === config.tier; <span class="cm">// config is in browser scope</span></span>
+<span class="ok-line">  }, planConfig); <span class="cm">// structured-cloned and injected as parameter</span></span>
+
+  <span class="fn">expect</span>(flagValue).<span class="fn">toBe</span>(<span class="kw">true</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>planConfig</code> is passed as the second argument to <code>page.evaluate</code>, structured-cloned into the browser context, and received as the <code>config</code> parameter. The browser-side function has a genuine in-scope reference to the data it needs, making the comparison reliable.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"The closure variable is a plain string constant defined at module scope. Why would Playwright still fail to see it?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>It doesn't matter how the variable is declared — <code>const</code>, module scope, simple primitive. The boundary is between two separate V8 isolates. The Node.js runtime's memory heap is inaccessible from the browser page's heap. <strong>Closures work within a single V8 context; they do not serialize across process or isolate boundaries.</strong> Playwright serializes the function to a string, ships it over CDP (Chrome DevTools Protocol), and re-evaluates it in the browser, where the original lexical scope no longer exists.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often assume that because the callback is written inline in the test file, it shares scope with the surrounding test code — similar to how a regular JS closure works. They don't realize that Playwright serializes the function to a string and re-evaluates it in the browser, where the original lexical scope no longer exists.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../require-soft-assertions/reference.html">require-soft-assertions</a>
+  </nav>
+
+</div>
+</body>
+</html>

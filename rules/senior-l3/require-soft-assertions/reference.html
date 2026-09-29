@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>require-soft-assertions · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Assertion Strategy</p>
+    <h1>require-soft-assertions</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Assertion Strategy</span>
+      <span class="tag">Diagnostic Coverage</span>
+      <span class="tag">expect.soft</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    By default, Playwright's <code>expect()</code> throws immediately on the first failing assertion, halting the rest of the test body. In test suites that validate multiple independent UI states in a single test (e.g., a dashboard with several KPI tiles or a multi-field form), this means a single early failure masks all subsequent assertion results. <code>expect.soft()</code> collects all failures and reports them together at the end of the test, giving engineers a complete picture of what broke in one run rather than forcing repeated re-runs to surface each issue.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate can explain the difference in failure semantics between <code>expect()</code> and <code>expect.soft()</code>: hard assertions abort execution while soft assertions accumulate errors and surface them at <code>test.end()</code> via <code>testInfo.errors</code>.</li>
+    <li>The candidate understands when enforcing soft assertions is an intentional architectural choice (longer, state-rich tests) versus when hard assertions are preferable (early precondition checks, setup guard conditions where continuing would produce meaningless results).</li>
+    <li>The candidate recognises that <code>expect.soft()</code> failures still mark the test as failed — they do not silently pass — and can articulate that this is not a way to "suppress" failures but a way to gather full diagnostic coverage per test run.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Multiple independent field validations abort early
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'profile page displays all user details correctly'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/profile/settings'</span>);
+
+<span class="err-line">  <span class="cm">// If display-name fails, the other 4 fields are never checked</span></span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'display-name'</span>)).<span class="fn">toHaveText</span>(<span class="str">'Jane Doe'</span>);</span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'email-address'</span>)).<span class="fn">toHaveText</span>(<span class="str">'jane@example.com'</span>);</span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'member-since'</span>)).<span class="fn">toContainText</span>(<span class="str">'2022'</span>);</span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'subscription-tier'</span>)).<span class="fn">toHaveText</span>(<span class="str">'Pro'</span>);</span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'avatar'</span>)).<span class="fn">toBeVisible</span>();</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> All five assertions are independent UI facts about the same page state. If <code>display-name</code> fails, the test aborts and the reporter shows only one failure — the broken state of the other four fields is invisible until the first is fixed and the test is re-run.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Dashboard KPI tiles checked sequentially with hard assertions
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'sales dashboard shows correct summary metrics'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/dashboard/sales'</span>);
+  <span class="kw">await</span> page.<span class="fn">waitForLoadState</span>(<span class="str">'networkidle'</span>);
+
+<span class="err-line">  <span class="cm">// After a backend data-pipeline change, all four KPIs may be stale simultaneously</span></span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Total Revenue'</span> }).<span class="fn">locator</span>(<span class="str">'+ span'</span>)).<span class="fn">toHaveText</span>(<span class="str">'$1,240,000'</span>);</span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'New Customers'</span> }).<span class="fn">locator</span>(<span class="str">'+ span'</span>)).<span class="fn">toHaveText</span>(<span class="str">'348'</span>);</span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Churn Rate'</span> }).<span class="fn">locator</span>(<span class="str">'+ span'</span>)).<span class="fn">toHaveText</span>(<span class="str">'2.4%'</span>);</span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Avg Order Value'</span> }).<span class="fn">locator</span>(<span class="str">'+ span'</span>)).<span class="fn">toHaveText</span>(<span class="str">'$312'</span>);</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> After a backend data pipeline change, all four KPI values might be stale simultaneously, but a hard assertion on the first one prevents the test from reporting which other metrics are also wrong — leading to multiple re-runs and slower incident diagnosis.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Soft assertions collect all independent field failures at once
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'profile page displays all user details correctly'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/profile/settings'</span>);
+
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'display-name'</span>)).<span class="fn">toHaveText</span>(<span class="str">'Jane Doe'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'email-address'</span>)).<span class="fn">toHaveText</span>(<span class="str">'jane@example.com'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'member-since'</span>)).<span class="fn">toContainText</span>(<span class="str">'2022'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'subscription-tier'</span>)).<span class="fn">toHaveText</span>(<span class="str">'Pro'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'avatar'</span>)).<span class="fn">toBeVisible</span>();</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> Every assertion runs regardless of earlier failures, so a single test run surfaces all broken fields simultaneously. The test is still marked as failed when any soft assertion does not pass, preserving test integrity while maximising diagnostic output.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Hard assertion guards the precondition, soft assertions validate content
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'checkout confirmation page shows complete order summary'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout/confirm?orderId=ORD-9921'</span>);
+
+<span class="ok-line">  <span class="cm">// Hard assertion: if wrong order loaded, continuing is meaningless</span></span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'order-id'</span>)).<span class="fn">toHaveText</span>(<span class="str">'ORD-9921'</span>);</span>
+
+<span class="ok-line">  <span class="cm">// Soft assertions: all content fields are independent — verify all in one pass</span></span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'item-name'</span>)).<span class="fn">toHaveText</span>(<span class="str">'Wireless Headphones'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'item-qty'</span>)).<span class="fn">toHaveText</span>(<span class="str">'2'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'subtotal'</span>)).<span class="fn">toHaveText</span>(<span class="str">'$198.00'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'shipping-estimate'</span>)).<span class="fn">toContainText</span>(<span class="str">'3–5 business days'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> expect.<span class="fn">soft</span>(page.<span class="fn">getByTestId</span>(<span class="str">'confirmation-email-note'</span>)).<span class="fn">toContainText</span>(<span class="str">'jane@example.com'</span>);</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The hard assertion on the order ID acts as a guard — if the page loaded the wrong order, all subsequent content assertions would be meaningless noise. Once the precondition is confirmed, soft assertions take over so every display field is validated in one pass.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"If I use <code>expect.soft()</code> for all my assertions and every single one fails, does the test pass?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>No. <code>expect.soft()</code> failures are accumulated in <code>testInfo.errors</code> and the test is still marked as failed at the end. <strong>Soft assertions do not suppress failures — they defer them.</strong> The test outcome is the same as with hard assertions; only the point of reporting and the amount of diagnostic information differ.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe <code>expect.soft()</code> is a "lenient mode" that allows partial passes, or that it is always preferable to hard assertions. Strong seniors recognise that hard assertions are the right choice for precondition guards and setup steps where a failure means later assertions would operate on invalid state — mixing both approaches intentionally is the idiomatic pattern.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../prefer-web-first-assertions/reference.html">prefer-web-first-assertions</a>
+    <a class="nav-link" href="../no-unsafe-references/reference.html">no-unsafe-references →</a>
+  </nav>
+
+</div>
+</body>
+</html>

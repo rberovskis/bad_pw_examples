@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>L3 Senior Rules · Playwright SDET Interview</title>
+<link rel="stylesheet" href="_base.css">
+<style>
+.rule-grid {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 40px;
+}
+.rule-link {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  transition: border-color .15s, background .15s;
+}
+.rule-link:hover {
+  border-color: var(--accent);
+  background: var(--surface2);
+}
+.rule-link .rule-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--accent);
+  white-space: nowrap;
+  min-width: 260px;
+}
+.rule-link .rule-desc {
+  font-size: 13.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.rule-link:hover .rule-desc { color: var(--text); }
+h2.cat-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--text-dim);
+  margin: 32px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+h2.cat-title:first-of-type { margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview</p>
+    <h1 style="font-family:var(--font-sans);letter-spacing:-.02em">L3 — Senior Rules</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">15 rules</span>
+      <span class="tag">2 bad + 2 good examples per rule</span>
+      <span class="tag">Talking points included</span>
+    </div>
+  </header>
+
+  <h2 class="cat-title">Async Correctness</h2>
+  <div class="rule-grid">
+    <a class="rule-link" href="missing-playwright-await/reference.html">
+      <span class="rule-name">missing-playwright-await</span>
+      <span class="rule-desc">Unawaited Playwright assertions return a Promise that is silently discarded — the test always passes regardless of page state</span>
+    </a>
+    <a class="rule-link" href="no-test-return-statement/reference.html">
+      <span class="rule-name">no-test-return-statement</span>
+      <span class="rule-desc">Playwright ignores a test callback's return value, so <code>return somePromise</code> neither awaits it nor propagates its rejection</span>
+    </a>
+    <a class="rule-link" href="valid-expect-in-promise/reference.html">
+      <span class="rule-name">valid-expect-in-promise</span>
+      <span class="rule-desc">Assertions inside <code>.then()</code> chains that are not returned or awaited are detached from the test runner and never fail the test</span>
+    </a>
+  </div>
+
+  <h2 class="cat-title">Timeout Management</h2>
+  <div class="rule-grid">
+    <a class="rule-link" href="no-action-timeout/reference.html">
+      <span class="rule-name">no-action-timeout</span>
+      <span class="rule-desc">Per-action <code>timeout</code> overrides fragment the timeout budget across the suite; <code>timeout: 0</code> removes the circuit breaker entirely</span>
+    </a>
+    <a class="rule-link" href="require-to-pass-timeout/reference.html">
+      <span class="rule-name">require-to-pass-timeout</span>
+      <span class="rule-desc"><code>toPass()</code> defaults to <code>timeout: 0</code> (unbounded retry), silently hanging the suite when the condition is never met</span>
+    </a>
+  </div>
+
+  <h2 class="cat-title">Network Timing</h2>
+  <div class="rule-grid">
+    <a class="rule-link" href="no-networkidle/reference.html">
+      <span class="rule-name">no-networkidle</span>
+      <span class="rule-desc"><code>networkidle</code> relies on a 500 ms / 0-request heuristic that breaks on polling, WebSockets, and analytics beacons</span>
+    </a>
+    <a class="rule-link" href="no-wait-for-navigation/reference.html">
+      <span class="rule-name">no-wait-for-navigation</span>
+      <span class="rule-desc"><code>waitForNavigation</code> is event-based and race-prone; registering the listener after the triggering action misses navigations on fast machines</span>
+    </a>
+  </div>
+
+  <h2 class="cat-title">Locator Strategy &amp; Retry Logic</h2>
+  <div class="rule-grid">
+    <a class="rule-link" href="no-wait-for-selector/reference.html">
+      <span class="rule-name">no-wait-for-selector</span>
+      <span class="rule-desc"><code>waitForSelector</code> returns a stale <code>ElementHandle</code> — any DOM re-render between acquisition and use causes a detached-element error</span>
+    </a>
+  </div>
+
+  <h2 class="cat-title">Flakiness &amp; Hard-coded Delays</h2>
+  <div class="rule-grid">
+    <a class="rule-link" href="no-wait-for-timeout/reference.html">
+      <span class="rule-name">no-wait-for-timeout</span>
+      <span class="rule-desc">Hard-coded <code>waitForTimeout</code> sleeps are browser-state-unaware — they either under-wait on slow CI or over-wait always</span>
+    </a>
+  </div>
+
+  <h2 class="cat-title">Assertion Correctness</h2>
+  <div class="rule-grid">
+    <a class="rule-link" href="no-conditional-expect/reference.html">
+      <span class="rule-name">no-conditional-expect</span>
+      <span class="rule-desc">Assertions inside <code>if</code>/<code>catch</code>/ternary blocks may be skipped entirely — a test with zero executed assertions still passes</span>
+    </a>
+    <a class="rule-link" href="prefer-ending-with-an-expect/reference.html">
+      <span class="rule-name">prefer-ending-with-an-expect</span>
+      <span class="rule-desc">A test ending on an action proves actionability, not correctness — the resulting state is never verified</span>
+    </a>
+    <a class="rule-link" href="prefer-web-first-assertions/reference.html">
+      <span class="rule-name">prefer-web-first-assertions</span>
+      <span class="rule-desc">Instance methods like <code>.isVisible()</code> take a point-in-time snapshot with no retry; web-first assertions poll until the assertion passes or times out</span>
+    </a>
+  </div>
+
+  <h2 class="cat-title">Assertion Strategy</h2>
+  <div class="rule-grid">
+    <a class="rule-link" href="require-soft-assertions/reference.html">
+      <span class="rule-name">require-soft-assertions</span>
+      <span class="rule-desc">Hard <code>expect()</code> halts the test on first failure, hiding all subsequent assertion results; <code>expect.soft()</code> accumulates all failures before reporting</span>
+    </a>
+  </div>
+
+  <h2 class="cat-title">Browser/Node Context Boundary</h2>
+  <div class="rule-grid">
+    <a class="rule-link" href="no-unsafe-references/reference.html">
+      <span class="rule-name">no-unsafe-references</span>
+      <span class="rule-desc">Closures in <code>page.evaluate</code> / <code>addInitScript</code> are serialized and re-evaluated in the browser — outer-scope variables resolve to <code>undefined</code> silently</span>
+    </a>
+  </div>
+
+</div>
+</body>
+</html>

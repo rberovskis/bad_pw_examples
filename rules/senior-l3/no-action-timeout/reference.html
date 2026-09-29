@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>no-action-timeout · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Timeout Management</p>
+    <h1>no-action-timeout</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Timeout Management</span>
+      <span class="tag">Config Fragmentation</span>
+      <span class="tag">Infinite Hang</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    Playwright action methods (<code>click</code>, <code>fill</code>, <code>check</code>, etc.) accept a <code>timeout</code> option that overrides the suite-wide <code>actionTimeout</code> for that single call. When developers sprinkle these per-call overrides across a test suite they fragment the timeout budget — no single place in configuration describes how long any given interaction is allowed to take. More critically, <code>{ timeout: 0 }</code> disables the guard entirely: if the target element never becomes interactable the test hangs indefinitely, blocking the CI runner until the job's wall-clock limit kills it rather than failing with a meaningful message.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate distinguishes between <strong>action timeouts</strong> (a single interaction like <code>click</code> or <code>fill</code>) and <strong>navigation/wait timeouts</strong> (<code>page.goto</code>, <code>waitForURL</code>) — and can explain why the rule only flags the former.</li>
+    <li>The candidate knows the three escalation paths: delete the override if a prior <code>waitFor</code>/assertion already established the condition; use <code>test.setTimeout()</code> or <code>test.slow()</code> when a whole test needs more room; raise <code>use.actionTimeout</code> in config only when the new value is right for the entire suite.</li>
+    <li>The candidate understands the <code>allow</code> option and when it is appropriate (e.g. <code>setInputFiles</code> with a legitimately large upload) versus being misused as an escape hatch.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Per-action timeouts masking a slow checkout API
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'user completes checkout with saved card'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/cart'</span>);
+
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Proceed to Checkout'</span> }).<span class="fn">click</span>({ timeout: <span class="num">10_000</span> });</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Checkout'</span> })).<span class="fn">toBeVisible</span>();
+
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Cardholder name'</span>).<span class="fn">fill</span>(<span class="str">'Jane Smith'</span>, { timeout: <span class="num">5_000</span> });</span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Card number'</span>).<span class="fn">fill</span>(<span class="str">'4111111111111111'</span>, { timeout: <span class="num">5_000</span> });</span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Expiry'</span>).<span class="fn">fill</span>(<span class="str">'12/29'</span>, { timeout: <span class="num">5_000</span> });</span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'CVV'</span>).<span class="fn">fill</span>(<span class="str">'123'</span>, { timeout: <span class="num">5_000</span> });</span>
+
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place Order'</span> }).<span class="fn">click</span>({ timeout: <span class="num">15_000</span> });</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Order Confirmed'</span> })).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> Every interaction carries its own bespoke timeout, creating a hidden distributed budget that no config value controls. The inflated <code>15_000</code> on <code>Place Order</code> is a red flag that a slow payment API is being tolerated rather than diagnosed.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Infinite hang with <code>timeout: 0</code> on a conditionally rendered element
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'admin can publish a draft article'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/cms/articles'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'row'</span>, { name: <span class="op">/</span>Quarterly Report<span class="op">/</span> })
+    .<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Edit'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'combobox'</span>, { name: <span class="str">'Status'</span> }).<span class="fn">selectOption</span>(<span class="str">'published'</span>, { timeout: <span class="num">0</span> });</span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Save Changes'</span> }).<span class="fn">click</span>({ timeout: <span class="num">0</span> });</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'alert'</span>)).<span class="fn">toContainText</span>(<span class="str">'Article published'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>{ timeout: 0 }</code> removes Playwright's safety net entirely. If the <code>Status</code> combobox is gated behind a feature flag or <code>Save Changes</code> is disabled while a background validation runs, the test will hang until the CI job's wall-clock limit terminates it — producing no actionable failure message.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Checkout flow with config-driven timeout budget
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'user completes checkout with saved card'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="cm">// If the payment flow is genuinely slow, raise actionTimeout</span>
+  <span class="cm">// in playwright.config.ts — not here per-call.</span>
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/cart'</span>);
+
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Proceed to Checkout'</span> }).<span class="fn">click</span>();</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Checkout'</span> })).<span class="fn">toBeVisible</span>();
+
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Cardholder name'</span>).<span class="fn">fill</span>(<span class="str">'Jane Smith'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Card number'</span>).<span class="fn">fill</span>(<span class="str">'4111111111111111'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Expiry'</span>).<span class="fn">fill</span>(<span class="str">'12/29'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'CVV'</span>).<span class="fn">fill</span>(<span class="str">'123'</span>);</span>
+
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place Order'</span> }).<span class="fn">click</span>();</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Order Confirmed'</span> })).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> All timeout budgets are delegated to <code>actionTimeout</code> in <code>playwright.config.ts</code> — a single authoritative number. If the payment API slows down, one config change adjusts every test at once rather than a grep-and-replace across the suite.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Conditional UI handled with <code>isVisible()</code> guard
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'admin can publish a draft article'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/cms/articles'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'row'</span>, { name: <span class="op">/</span>Quarterly Report<span class="op">/</span> })
+    .<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Edit'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="cm">// Never suppress the guard with timeout:0 — use isVisible() for optional UI</span></span>
+<span class="ok-line">  <span class="kw">const</span> warningDismiss = page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Discard Changes'</span> });</span>
+<span class="ok-line">  <span class="kw">if</span> (<span class="kw">await</span> warningDismiss.<span class="fn">isVisible</span>()) {</span>
+<span class="ok-line">    <span class="kw">await</span> warningDismiss.<span class="fn">click</span>();</span>
+<span class="ok-line">  }</span>
+
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'combobox'</span>, { name: <span class="str">'Status'</span> }).<span class="fn">selectOption</span>(<span class="str">'published'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Save Changes'</span> }).<span class="fn">click</span>();
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'alert'</span>)).<span class="fn">toContainText</span>(<span class="str">'Article published'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> Optional UI is handled with an <code>isVisible()</code> guard rather than suppressing the timeout, so Playwright's built-in action timeout still protects every interaction. If <code>Save Changes</code> is unexpectedly disabled, the test fails immediately with a clear message instead of hanging.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"The rule doc says a deliberately short timeout — like <code>{ timeout: 1000 }</code> to probe for an optional cookie banner — is a legitimate pattern. Does that mean you'd add <code>click</code> to the <code>allow</code> list to keep those tests green?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>No. The <code>allow</code> option is per-method, not per-call — adding <code>click</code> exempts <em>every</em> <code>click</code> timeout in the entire suite, defeating the rule. The idiomatic fix is the <code>isVisible()</code> guard: check visibility first, then act unconditionally. If the short-timeout pattern appears in only one or two places, <code>// eslint-disable-next-line</code> with an explanatory comment is more honest than a blanket <code>allow</code> entry.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe that <code>{ timeout: 0 }</code> means "wait as long as needed" — treating it as infinite patience. In practice it is the opposite: it removes the circuit breaker, so any stuck element causes the test process to hang indefinitely rather than failing with a diagnostic message. The correct tool for genuinely indeterminate wait times is a <code>waitFor</code> with an explicit state condition.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../valid-expect-in-promise/reference.html">valid-expect-in-promise</a>
+    <a class="nav-link" href="../require-to-pass-timeout/reference.html">require-to-pass-timeout →</a>
+  </nav>
+
+</div>
+</body>
+</html>

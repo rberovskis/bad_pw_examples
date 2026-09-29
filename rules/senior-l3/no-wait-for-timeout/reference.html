@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>no-wait-for-timeout · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Flakiness &amp; Hard-coded Delays</p>
+    <h1>no-wait-for-timeout</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Flakiness</span>
+      <span class="tag">Hard-coded Delay</span>
+      <span class="tag">Dumb Sleep</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    <code>page.waitForTimeout</code> is a dumb sleep: it pauses the test for a fixed wall-clock duration with no awareness of browser state, network conditions, or CI machine speed, making tests both slower than necessary and still prone to failure when the system is slower than expected. Playwright's execution model is built around auto-retrying, event-driven assertions — <code>waitForSelector</code>, <code>waitForResponse</code>, <code>waitForURL</code>, etc. — that resolve the moment the condition is true and throw a meaningful error when the timeout elapses. Hard-coded delays hide the real signal that the test should be waiting for, mask the root cause of flakiness instead of fixing it, and inflate suite duration linearly with every added sleep across a large test suite.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate can name specific Playwright APIs that replace <code>waitForTimeout</code> and explain <em>which</em> signal each one waits on (DOM readiness, network idle, URL change, JS expression, element visibility).</li>
+    <li>The candidate understands that <code>waitForTimeout</code> is a smell pointing to a missing explicit wait, and can diagnose what the underlying race condition actually is rather than just substituting a different API mechanically.</li>
+    <li>The candidate can articulate the trade-off between correctness and speed: a fixed delay that is "long enough" today becomes a bottleneck over time, while an event-driven wait exits as soon as the condition is met — both faster on average and more reliable under load.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Waiting for a spinner to disappear after form submit
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'submitting the login form navigates to the dashboard'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'s3cr3t!'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="cm">// Guess at server response time — races on slow CI, wastes time on fast machines</span></span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">waitForTimeout</span>(<span class="num">3000</span>);</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Dashboard'</span> })).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> The 3-second sleep is a guess at how long the network round-trip and redirect take. On a slow CI runner it will still race, and on a fast machine it wastes 3 seconds every run. The test should wait for an observable browser signal — the URL change or the heading becoming visible — both of which Playwright already retries automatically.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Polling for a toast notification after an API action
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'deleting a record shows a success toast'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/settings/users'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'row'</span>, { name: <span class="str">'Jane Doe'</span> }).<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Delete'</span> }).<span class="fn">click</span>();
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Confirm'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="cm">// Arbitrary buffer racing against animation AND server latency simultaneously</span></span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">waitForTimeout</span>(<span class="num">1500</span>);</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'alert'</span>)).<span class="fn">toHaveText</span>(<span class="str">'User deleted successfully'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> The 1.5-second delay is an arbitrary buffer that races against animation timing and server latency simultaneously. <code>expect(toast).toHaveText(...)</code> already retries on its own — removing the sleep entirely lets Playwright wait the right amount of time automatically.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Wait for URL change after login
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'submitting the login form navigates to the dashboard'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'s3cr3t!'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">waitForURL</span>(<span class="str">'/dashboard'</span>); <span class="cm">// resolves the instant the URL changes</span></span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Dashboard'</span> })).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>waitForURL</code> resolves the instant the browser navigates to the target URL and throws a descriptive error if it never does — no wasted time on fast machines and no flakiness on slow ones.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Wait for the network response that triggers the toast
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'deleting a record shows a success toast'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/settings/users'</span>);
+
+<span class="ok-line">  <span class="kw">const</span> deleteResponse = page.<span class="fn">waitForResponse</span>(</span>
+<span class="ok-line">    (resp) =&gt; resp.<span class="fn">url</span>().<span class="fn">includes</span>(<span class="str">'/api/users/'</span>) &amp;&amp; resp.<span class="fn">request</span>().<span class="fn">method</span>() === <span class="str">'DELETE'</span></span>
+<span class="ok-line">  );</span>
+
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'row'</span>, { name: <span class="str">'Jane Doe'</span> }).<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Delete'</span> }).<span class="fn">click</span>();
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Confirm'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="kw">await</span> deleteResponse; <span class="cm">// synchronise on the real signal</span></span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'alert'</span>)).<span class="fn">toHaveText</span>(<span class="str">'User deleted successfully'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> By awaiting the specific network response that drives the UI update, the test synchronises on the real signal rather than a guess. The toast assertion then benefits from Playwright's built-in auto-retry, making the test as fast as the server and as resilient as the event it actually depends on.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"Our app has a CSS animation that delays an element becoming interactive by 400 ms — <code>waitForTimeout(500)</code> makes the test pass reliably. Isn't that a legitimate use?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>Push back on the framing: the correct fix is to wait for the element to be <em>enabled</em> or <em>stable</em> using <code>waitFor({ state: 'stable' })</code> or <code>toBeEnabled()</code>, which polls until the animation settles. If the app intentionally gates interactivity behind an animation, the test should assert on that observable state — not guess at its duration. Playwright's actionability checks already wait for elements to stop moving before clicking, so the sleep may not even be doing what the author thinks.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often treat <code>waitForTimeout</code> as a safe fallback for "I'm not sure what to wait for," not realising that Playwright's locator-based assertions (<code>toBeVisible</code>, <code>toHaveText</code>, <code>toBeEnabled</code>) all auto-retry for up to the configured timeout by default — meaning the explicit sleep is redundant in the best case and still racy in the worst.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../no-wait-for-selector/reference.html">no-wait-for-selector</a>
+    <a class="nav-link" href="../no-conditional-expect/reference.html">no-conditional-expect →</a>
+  </nav>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>no-test-return-statement · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Async Correctness</p>
+    <h1>no-test-return-statement</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Async Correctness</span>
+      <span class="tag">False Positives</span>
+      <span class="tag">Cross-Framework Trap</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    Playwright's test runner drives each test through its own internal async executor — it does <strong>not</strong> chain on or <code>await</code> the value returned by the test callback. Returning a <code>Promise</code> from a test body therefore silently discards it: the runner marks the test complete as soon as the callback returns the promise object, before that promise has settled. Any assertion failures or exceptions thrown inside the abandoned promise are either swallowed entirely or attached to a subsequent test's context, producing misleading failure attribution. An empty <code>return</code> at the top level is dead code for the same reason.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate explains the causal chain precisely: the test runner does not consume the return value, so a returned promise is abandoned and its rejection is never propagated to the test result.</li>
+    <li>The candidate distinguishes between top-level returns (flagged) and <code>return</code> inside a nested callback, conditional, or loop — the latter is ordinary control flow and is intentionally allowed.</li>
+    <li>The candidate connects this to real failure modes: a flaky green test that masks a broken assertion, or a timeout in a later unrelated test caused by leaked async work.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Returning a navigation promise
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test, expect } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+
+test(<span class="str">'redirects unauthenticated users to the login page'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+<span class="err-line">  <span class="kw">return</span> page.<span class="fn">goto</span>(<span class="str">'/dashboard'</span>).<span class="fn">then</span>(() =&gt; {</span>
+<span class="err-line">    <span class="kw">return</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">'/login'</span>);</span>
+<span class="err-line">  });</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> The entire promise chain is returned rather than awaited. Playwright discards the return value, so the test exits immediately after <code>goto</code> is called — the URL assertion never executes before the runner marks the test as passed.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Returning an expect assertion
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test, expect } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+
+test(<span class="str">'submit button is disabled until all fields are filled'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/signup'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+
+<span class="err-line">  <span class="kw">return</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Create account'</span> })).<span class="fn">toBeDisabled</span>();</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>expect(...).toBeDisabled()</code> returns a <code>Promise</code>. Returning it instead of awaiting it means the assertion promise is dropped — the test always passes regardless of the button's actual state.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Awaiting the navigation and assertion chain
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test, expect } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+
+test(<span class="str">'redirects unauthenticated users to the login page'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/dashboard'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">'/login'</span>);</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> Each async operation is explicitly awaited, so the runner holds the test open until every assertion has settled. Any failure in <code>toHaveURL</code> is correctly attributed to this test.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Early return for browser-skip with awaited assertions
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test, expect } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+
+test(<span class="str">'clipboard paste populates the search field'</span>, <span class="kw">async</span> ({ page, browserName }) =&gt; {
+  <span class="cm">// Clipboard API is not available in all headless browsers</span>
+<span class="ok-line">  <span class="kw">if</span> (browserName === <span class="str">'firefox'</span>) {</span>
+<span class="ok-line">    <span class="kw">return</span>; <span class="cm">// intentional early-exit — no return value</span></span>
+<span class="ok-line">  }</span>
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/products'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'searchbox'</span>).<span class="fn">focus</span>();
+  <span class="kw">await</span> page.keyboard.<span class="fn">insertText</span>(<span class="str">'wireless headphones'</span>);
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'searchbox'</span>)).<span class="fn">toHaveValue</span>(<span class="str">'wireless headphones'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The bare <code>return</code> inside the conditional is intentional early-exit control flow — it carries no value and is explicitly permitted by the rule. All actual async operations below it are properly awaited.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"The test suite passes with no failures and no timeouts. Is it safe to assume a test that uses <code>return page.goto(...)</code> is correctly verifying behavior?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>No — a returned promise is silently discarded by Playwright's runner, so the test passes trivially without executing any assertions inside the chain. A green result here is a false positive, not proof of correctness. <strong>The only reliable signal is that the lint rule fires</strong>; at runtime there is no warning.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often assume Playwright works like Jest, which <em>does</em> <code>await</code> the return value of the test function. They conflate the two and believe returning a promise is equivalent to awaiting it — true in Jest but false in Playwright's runner, making this a subtle cross-framework portability trap.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../missing-playwright-await/reference.html">missing-playwright-await</a>
+    <a class="nav-link" href="../valid-expect-in-promise/reference.html">valid-expect-in-promise →</a>
+  </nav>
+
+</div>
+</body>
+</html>

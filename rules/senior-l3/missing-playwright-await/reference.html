@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>missing-playwright-await · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Async Correctness</p>
+    <h1>missing-playwright-await</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Async Correctness</span>
+      <span class="tag">False Positives</span>
+      <span class="tag">Promise Lifecycle</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    Playwright's assertion and navigation APIs return Promises that must be awaited for the engine to perform its internal retry logic, DOM polling, and network synchronization. When a call like <code>expect(locator).toBeVisible()</code> is not awaited, the test runner discards the Promise and moves on immediately — the assertion never actually executes, so the test passes regardless of the page state. For <code>waitForResponse</code> and similar methods, skipping <code>await</code> means the event listener is registered after the triggering action, creating a race condition that silently succeeds on fast machines but flakes in CI.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate explains that un-awaited Playwright matchers silently no-op: the test appears green but no assertion was made, producing a false positive that masks real regressions.</li>
+    <li>The candidate understands the difference between <em>registering</em> a Promise (setting up the listener) and <em>awaiting</em> it (blocking until resolution), and why order matters especially for network interception with <code>waitForResponse</code> / <code>waitForRequest</code>.</li>
+    <li>The candidate can describe the correct patterns: direct <code>await</code>, destructured <code>Promise.all</code> for concurrent listen-then-act, and <code>await test.step(...)</code> for named step grouping.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Unawaited assertion silently passes on broken UI
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test, expect } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+
+test(<span class="str">'user can submit the login form and reach the dashboard'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'hunter2'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="cm">// BUG: no await — this assertion is never evaluated.</span></span>
+<span class="err-line">  <span class="cm">// The test passes even if the redirect never happens.</span></span>
+<span class="err-line">  <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Dashboard'</span> })).<span class="fn">toBeVisible</span>();</span>
+<span class="err-line">  <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">'Welcome back, user@example.com'</span>)).<span class="fn">toBeVisible</span>();</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> Both <code>expect(...).toBeVisible()</code> calls return Promises that are never awaited. Playwright's internal retry loop never runs — the assertions are discarded and the test always reports green regardless of what is rendered after login.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Race condition from registering a network listener too late
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test, expect } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+
+test(<span class="str">'checkout flow posts order and shows confirmation number'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Card number'</span>).<span class="fn">fill</span>(<span class="str">'4111111111111111'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Expiry'</span>).<span class="fn">fill</span>(<span class="str">'12/29'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'CVV'</span>).<span class="fn">fill</span>(<span class="str">'123'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place order'</span> }).<span class="fn">click</span>();
+<span class="err-line">  page.<span class="fn">waitForResponse</span>(<span class="str">'/api/orders'</span>); <span class="cm">// no await + registered AFTER click</span></span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'confirmation-number'</span>)).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>waitForResponse</code> is not awaited, so the result Promise is abandoned and the test never waits for the response. The listener is also registered <em>after</em> the triggering click — introducing a race even if <code>await</code> were added.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — All assertions properly awaited
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test, expect } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+
+test(<span class="str">'user can submit the login form and reach the dashboard'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'hunter2'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Dashboard'</span> })).<span class="fn">toBeVisible</span>();</span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByText</span>(<span class="str">'Welcome back, user@example.com'</span>)).<span class="fn">toBeVisible</span>();</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> Each <code>await</code> transfers control to Playwright's assertion engine, which retries the DOM check with built-in timeouts. The test only proceeds — or fails — once each condition is definitively resolved.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Network listener registered before the triggering action via Promise.all
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test, expect } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+
+test(<span class="str">'checkout flow posts order and shows confirmation number'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Card number'</span>).<span class="fn">fill</span>(<span class="str">'4111111111111111'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Expiry'</span>).<span class="fn">fill</span>(<span class="str">'12/29'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'CVV'</span>).<span class="fn">fill</span>(<span class="str">'123'</span>);
+
+<span class="ok-line">  <span class="kw">const</span> [orderResponse] = <span class="kw">await</span> <span class="tp">Promise</span>.<span class="fn">all</span>([</span>
+<span class="ok-line">    page.<span class="fn">waitForResponse</span>((resp) =&gt; resp.<span class="fn">url</span>().<span class="fn">includes</span>(<span class="str">'/api/orders'</span>) &amp;&amp; resp.<span class="fn">status</span>() === <span class="num">201</span>),</span>
+<span class="ok-line">    page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place order'</span> }).<span class="fn">click</span>(),</span>
+<span class="ok-line">  ]);</span>
+
+  <span class="kw">const</span> { orderId } = <span class="kw">await</span> orderResponse.<span class="fn">json</span>();
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'confirmation-number'</span>)).<span class="fn">toHaveText</span>(orderId);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The <code>waitForResponse</code> listener is in place <em>before</em> <code>click()</code> fires, eliminating the race. <code>Promise.all</code> keeps both concurrent — the response resolves as soon as it arrives, and <code>await</code> ensures the test blocks until both Promises settle.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"If an un-awaited <code>expect(...).toBeVisible()</code> doesn't throw, how would you ever know your test was silently skipping the assertion in a real CI pipeline?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>The only reliable indicator is a failing test when the UI is intentionally broken — a test that always passes regardless of DOM state is a false positive. They would enforce the ESLint rule in CI so the linter catches it before the test runner is even invoked. <strong>Playwright's <code>--reporter=html</code> won't surface un-awaited assertions as failures</strong> — static analysis is the only safety net.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe that because the test file uses <code>async/await</code> elsewhere, any Playwright call inside an <code>async</code> function is automatically awaited. They conflate "the function is async" with "every expression inside it is awaited," not realizing that a Promise returned from an un-awaited call is simply garbage-collected without execution.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../no-test-return-statement/reference.html">no-test-return-statement →</a>
+  </nav>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>no-wait-for-navigation · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Network Timing</p>
+    <h1>no-wait-for-navigation</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Navigation</span>
+      <span class="tag">Race Conditions</span>
+      <span class="tag">Legacy API</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    <code>page.waitForNavigation()</code> is a legacy Playwright API that waits for a navigation event, but it must be started <strong>before</strong> the action that triggers navigation — creating an inherently fragile promise-race pattern. If the navigation resolves before the <code>await</code> is reached, the promise is already settled and can be missed entirely, causing the test to hang or proceed on the wrong page. Playwright's modern alternatives (<code>waitForURL</code>, <code>waitForLoadState</code>) are action-coupled and deterministic, eliminating the race condition by design.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate understands that <code>waitForNavigation()</code> relies on timing: the promise must be created before the triggering action, and any deviation in execution order can cause a missed navigation event or a deadlock.</li>
+    <li>The candidate can articulate why <code>waitForURL()</code> or <code>waitForLoadState()</code> are safer replacements — they assert on a concrete observable state rather than listening for a transient event.</li>
+    <li>The candidate recognizes that the pattern is especially dangerous in CI environments where CPU throttling and network variance make the race window wider and failures less reproducible locally.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Sequential await causes missed navigation
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'redirects to dashboard after login'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'correcthorsebatterystaple'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="cm">// Navigation may already be complete before this line is reached</span></span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">waitForNavigation</span>();</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">'/dashboard'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>waitForNavigation()</code> is called <em>after</em> the click. If the server responds quickly and the navigation resolves before the await is registered, the event is missed and the call either hangs indefinitely or resolves on a stale state. This pattern is non-deterministic across machines.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Detached promise with concurrent action and networkidle
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'submitting the form navigates to the confirmation page'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Card number'</span>).<span class="fn">fill</span>(<span class="str">'4111111111111111'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Expiry'</span>).<span class="fn">fill</span>(<span class="str">'12/28'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'CVV'</span>).<span class="fn">fill</span>(<span class="str">'123'</span>);
+
+<span class="err-line">  <span class="kw">const</span> navPromise = page.<span class="fn">waitForNavigation</span>({ waitUntil: <span class="str">'networkidle'</span> }); <span class="cm">// event-based + networkidle</span></span>
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Pay now'</span> }).<span class="fn">click</span>();
+  <span class="kw">await</span> navPromise;
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>)).<span class="fn">toHaveText</span>(<span class="str">'Order confirmed'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> Although the promise is created before the click, <code>waitUntil: 'networkidle'</code> combined with <code>waitForNavigation</code> is unreliable — the navigation event fires before the network settles, and additional XHR calls (analytics, beacons) on the confirmation page can cause the <code>networkidle</code> condition to never be reached.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Assert on target URL after action
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'redirects to dashboard after login'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'correcthorsebatterystaple'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">waitForURL</span>(<span class="str">'/dashboard'</span>); <span class="cm">// state assertion — never misses a navigation</span></span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Welcome back'</span> })).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>waitForURL()</code> polls the current URL against a matcher and resolves once it matches, regardless of when the navigation actually completed relative to the call. There is no race window — it is a state assertion, not an event listener.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Glob pattern for dynamic post-submit URLs
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'submitting the form navigates to the confirmation page'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/checkout'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Card number'</span>).<span class="fn">fill</span>(<span class="str">'4111111111111111'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Expiry'</span>).<span class="fn">fill</span>(<span class="str">'12/28'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'CVV'</span>).<span class="fn">fill</span>(<span class="str">'123'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Pay now'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="cm">// Glob handles the dynamic order ID in the URL</span></span>
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">waitForURL</span>(<span class="str">'/orders/*/confirmation'</span>);</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>)).<span class="fn">toHaveText</span>(<span class="str">'Order confirmed'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The glob pattern in <code>waitForURL()</code> accommodates dynamic URL segments like order IDs without resorting to regex complexity, and the method is inherently race-safe — it only resolves when the observable URL state matches.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"The Playwright docs show an example using <code>Promise.all([page.waitForNavigation(), page.click(...)])</code> — isn't that safe? Why does the rule still flag it?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>While <code>Promise.all</code> does eliminate the most obvious race by registering the listener before the click fires, <code>waitForNavigation()</code> is still fundamentally event-driven and can misbehave with redirects (it resolves on the <em>first</em> navigation event, not the final destination), SPAs that manipulate <code>history.pushState</code>, or pages that do client-side redirects. <code>waitForURL()</code> is unambiguously correct because it asserts the end state, not an intermediate event.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe that wrapping both calls in <code>Promise.all</code> fully solves the timing problem and see the rule as overly strict. They miss that <code>waitForNavigation()</code> fires on the first <code>load</code>/<code>commit</code> event and does not guarantee the test has landed on the <em>intended</em> URL — a server-side redirect chain will cause it to resolve on the intermediate URL rather than the final destination.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../no-networkidle/reference.html">no-networkidle</a>
+    <a class="nav-link" href="../no-wait-for-selector/reference.html">no-wait-for-selector →</a>
+  </nav>
+
+</div>
+</body>
+</html>

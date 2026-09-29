@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>no-networkidle · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Network Timing</p>
+    <h1>no-networkidle</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Network Timing</span>
+      <span class="tag">Flakiness</span>
+      <span class="tag">Heuristic Wait</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    Playwright's <code>networkidle</code> state waits until there are no more than 0 in-flight network requests for at least 500 ms — a heuristic that makes no semantic guarantees about application readiness. Modern SPAs routinely fire background telemetry, polling, or WebSocket keep-alives that cause <code>networkidle</code> to never settle — or to settle prematurely before a critical data fetch completes — resulting in flaky tests whose failure rate scales with infrastructure latency. Playwright's web-first assertions (<code>toBeVisible()</code>, <code>toHaveText()</code>, etc.) are auto-retrying and tied directly to DOM state, making them deterministic about what the user actually sees rather than about network activity.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate can explain that <code>networkidle</code> is a timing heuristic, not a semantic signal, and describe the specific 500 ms / 0-request window that defines it.</li>
+    <li>The candidate can identify concrete failure modes: polling endpoints, analytics beacons, and WebSocket frames are all real-world sources of non-settlement or false settlement that make <code>networkidle</code> unreliable.</li>
+    <li>The candidate knows the idiomatic replacements — web-first assertions on specific locators, <code>waitForResponse</code>, or <code>waitForURL</code> without <code>networkidle</code> — and can articulate <em>why</em> those replacements are strictly more reliable.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Waiting for networkidle after login
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'redirects to dashboard after login'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'s3cr3t!'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="cm">// Fragile: analytics beacons / session heartbeats may prevent idle</span></span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">waitForLoadState</span>(<span class="str">'networkidle'</span>);</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">'/dashboard'</span>);
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Welcome back'</span> })).<span class="fn">toBeVisible</span>();
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> After the sign-in POST resolves, the app may fire analytics events or session-refresh calls that keep the network active, preventing <code>networkidle</code> from settling. The test timeout is consumed waiting for silence that never comes, or the assertion runs too early when a short lull occurs before the dashboard data fetch starts.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Using networkidle as a <code>waitUntil</code> guard on navigation
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'loads product listing after category navigation'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/shop'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'link'</span>, { name: <span class="str">'Electronics'</span> }).<span class="fn">click</span>();
+
+<span class="err-line">  <span class="cm">// Blocks until ALL requests quiet — a 3rd-party widget can prevent this</span></span>
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">waitForURL</span>(<span class="str">'/shop/electronics'</span>, { waitUntil: <span class="str">'networkidle'</span> });</span>
+
+  <span class="kw">const</span> productCards = page.<span class="fn">locator</span>(<span class="str">'[data-testid="product-card"]'</span>);
+  <span class="kw">await</span> <span class="fn">expect</span>(productCards).<span class="fn">toHaveCount</span>(<span class="num">12</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>waitUntil: 'networkidle'</code> on <code>waitForURL</code> blocks until all requests settle globally. A background inventory-check poll or a third-party chat widget can delay the threshold indefinitely, and on slower CI runners the 500 ms quiet window may never arrive within the test timeout.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Assert on visible UI state after login
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'redirects to dashboard after login'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'s3cr3t!'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="cm">// Web-first assertions: auto-retrying, tied to DOM state, unaffected by background traffic</span></span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">'/dashboard'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Welcome back'</span> })).<span class="fn">toBeVisible</span>();</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>toHaveURL</code> and <code>toBeVisible</code> retry until the condition is true or the test times out, passing as soon as navigation and render complete — regardless of whether background requests are still in flight.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Wait for a specific response before asserting data
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'loads product listing after category navigation'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/shop'</span>);
+
+<span class="ok-line">  <span class="cm">// Register waiter BEFORE the action so the response is never missed</span></span>
+<span class="ok-line">  <span class="kw">const</span> productsResponse = page.<span class="fn">waitForResponse</span>(</span>
+<span class="ok-line">    (res) =&gt; res.<span class="fn">url</span>().<span class="fn">includes</span>(<span class="str">'/api/products'</span>) &amp;&amp; res.<span class="fn">status</span>() === <span class="num">200</span></span>
+<span class="ok-line">  );</span>
+
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'link'</span>, { name: <span class="str">'Electronics'</span> }).<span class="fn">click</span>();
+  <span class="kw">await</span> productsResponse;
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">locator</span>(<span class="str">'[data-testid="product-card"]'</span>)).<span class="fn">toHaveCount</span>(<span class="num">12</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>waitForResponse</code> targets the exact API call that populates the product list, making the assertion precise and immune to unrelated background traffic. Registering the waiter before the click ensures the response is never missed due to a race.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"If <code>networkidle</code> is so unreliable, why does Playwright still ship it?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p><code>networkidle</code> remains useful for a narrow set of static-site or server-rendered pages where there is no background network activity after load, and for generating PDFs or screenshots where you genuinely need the page fully quiesced. In interactive SPA test automation it is the wrong tool because SPAs are designed to have persistent background network activity. The right approach is always to couple assertions to the specific UI or API contract you care about.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe that <code>networkidle</code> is a reliable "wait for the page to fully load" primitive — equivalent to waiting for <code>DOMContentLoaded</code> or <code>load</code>. They do not realize it is a 500 ms heuristic over request count with no knowledge of application state, and that a quiet network does not guarantee the component tree has rendered or that data has been bound to the DOM.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../require-to-pass-timeout/reference.html">require-to-pass-timeout</a>
+    <a class="nav-link" href="../no-wait-for-navigation/reference.html">no-wait-for-navigation →</a>
+  </nav>
+
+</div>
+</body>
+</html>

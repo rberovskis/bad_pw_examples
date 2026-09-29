@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>no-wait-for-selector · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Locator Strategy</p>
+    <h1>no-wait-for-selector</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Locator Strategy</span>
+      <span class="tag">Stale Element</span>
+      <span class="tag">ElementHandle vs Locator</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    <code>page.waitForSelector</code> is a legacy Playwright API inherited from Puppeteer that returns an <code>ElementHandle</code> — a snapshot of a DOM node at a point in time. Unlike Playwright's <code>Locator</code> API, <code>ElementHandle</code> objects are not auto-retrying and not lazy; they detach from the DOM as soon as the element is removed or the frame navigates, causing subsequent actions to throw stale-element errors. The <code>Locator</code> API (returned by <code>page.locator</code>, <code>page.getByRole</code>, etc.) defers DOM resolution to action time and retries automatically, so it handles dynamic content, skeleton loaders, and client-side navigation without manual waiting.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate explains that <code>waitForSelector</code> returns an <code>ElementHandle</code>, not a <code>Locator</code>, and can articulate why that distinction matters for retry behavior and stale-element risk.</li>
+    <li>The candidate knows the idiomatic Playwright alternatives: <code>waitForURL()</code> after navigation, <code>waitForLoadState()</code> for network/DOM quiescence, <code>waitForFunction()</code> for arbitrary JS conditions, and — most commonly — simply using a <code>Locator</code> directly (which has built-in actionability waiting).</li>
+    <li>The candidate can describe a realistic scenario where removing <code>waitForSelector</code> and relying on Locator auto-waiting either simplified test code or fixed a flaky test.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Waiting for element before clicking
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'user can submit the login form'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">waitForSelector</span>(<span class="str">'#email-input'</span>); <span class="cm">// returns discarded ElementHandle</span></span>
+  <span class="kw">await</span> page.<span class="fn">fill</span>(<span class="str">'#email-input'</span>, <span class="str">'user@example.com'</span>);
+
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">waitForSelector</span>(<span class="str">'#password-input'</span>);</span>
+  <span class="kw">await</span> page.<span class="fn">fill</span>(<span class="str">'#password-input'</span>, <span class="str">'S3cur3P@ss!'</span>);
+
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">waitForSelector</span>(<span class="str">'button[type="submit"]'</span>);</span>
+  <span class="kw">await</span> page.<span class="fn">click</span>(<span class="str">'button[type="submit"]'</span>);
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">'/dashboard'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> Each <code>waitForSelector</code> call returns a discarded <code>ElementHandle</code> and the subsequent <code>page.fill</code> / <code>page.click</code> calls open a second race window — the element could detach between the wait and the action. Playwright's <code>Locator</code> actions already wait for the element to be visible and stable before acting, so the explicit waits are redundant and introduce extra round-trips to the browser process.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Polling for async content after navigation using ElementHandle
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'order history loads after soft navigation'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/account'</span>);
+  <span class="kw">await</span> page.<span class="fn">click</span>(<span class="str">'nav >> text=Orders'</span>);
+
+<span class="err-line">  <span class="cm">// Returns a stale snapshot — any re-render causes detached-element error</span></span>
+<span class="err-line">  <span class="kw">const</span> tableHandle = <span class="kw">await</span> page.<span class="fn">waitForSelector</span>(<span class="str">'table.orders-table'</span>);</span>
+<span class="err-line">  <span class="kw">const</span> rowCount = <span class="kw">await</span> tableHandle.<span class="fn">$$eval</span>(<span class="str">'tbody tr'</span>, rows =&gt; rows.length);</span>
+
+  <span class="fn">expect</span>(rowCount).<span class="fn">toBeGreaterThan</span>(<span class="num">0</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> After <code>waitForSelector</code> resolves, <code>tableHandle</code> is a snapshot. If the framework re-renders the table (e.g., a sort or pagination update arrives), <code>tableHandle</code> becomes detached and <code>$$eval</code> throws. Using <code>page.locator('table.orders-table tbody tr').count()</code> would re-query the live DOM on every call.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Relying on Locator actionability waiting
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'user can submit the login form'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+<span class="ok-line">  <span class="cm">// getByLabel and getByRole return Locators that auto-wait for visibility &amp; stability</span></span>
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'S3cur3P@ss!'</span>);</span>
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();</span>
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">'/dashboard'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>getByLabel</code> and <code>getByRole</code> return <code>Locator</code> objects that automatically wait for the target element to be attached, visible, stable, and enabled before performing each action. No manual waiting needed, the assertions are accessibility-aligned, and the test is resilient to loading spinners or transition animations.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Using waitForURL and Locator for post-navigation content
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'order history loads after soft navigation'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/account'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'link'</span>, { name: <span class="str">'Orders'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="kw">await</span> page.<span class="fn">waitForURL</span>(<span class="str">'/account/orders'</span>); <span class="cm">// correct primitive for client-side route</span></span>
+
+<span class="ok-line">  <span class="kw">const</span> rows = page.<span class="fn">locator</span>(<span class="str">'table.orders-table tbody tr'</span>); <span class="cm">// Locator — live DOM</span></span>
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(rows).<span class="fn">toHaveCountGreaterThan</span>(<span class="num">0</span>);</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> <code>waitForURL()</code> gates on client-side navigation correctly; the subsequent <code>Locator</code> assertion retries automatically against the live DOM until it passes or times out, making the test both readable and resilient to re-renders.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"If <code>page.waitForSelector</code> still works at runtime and your test passes, why should you bother replacing it?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>Passing today is not the same as being reliable under load or on slow CI machines. <code>waitForSelector</code> creates a discrete resolved-then-act gap where element detachment can cause intermittent failures. More importantly, it returns an <code>ElementHandle</code> whose downstream actions have no auto-retry, so any dynamic re-render between the wait and the action will throw. <strong>Locators eliminate that gap entirely by deferring resolution to action time</strong>, and they surface better errors (with element snapshots) when they do fail.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe that calling <code>waitForSelector</code> is the "safe" way to ensure an element exists before acting on it, not realising that Playwright's <code>Locator</code> API already performs that waiting internally as part of every <code>.click()</code>, <code>.fill()</code>, and <code>expect()</code> call. They conflate the Puppeteer mental model (explicit waits required) with Playwright's auto-waiting model, and miss the stale-element risk that comes from holding an <code>ElementHandle</code> reference across asynchronous boundaries.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../no-wait-for-navigation/reference.html">no-wait-for-navigation</a>
+    <a class="nav-link" href="../no-wait-for-timeout/reference.html">no-wait-for-timeout →</a>
+  </nav>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>valid-expect-in-promise · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Async Correctness</p>
+    <h1>valid-expect-in-promise</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Async Correctness</span>
+      <span class="tag">Promise Lifecycle</span>
+      <span class="tag">Floating Callbacks</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    Playwright's test runner tracks assertions by awaiting the promises they return. If a <code>.then()</code> callback containing an <code>expect()</code> is neither awaited nor returned from the test function, the test body finishes before the assertion ever executes — producing a false-green. Chained promises stored in variables but then branched into new <code>.then()</code> calls without re-assigning or returning the chain suffer the same fate — the final promise that carries the assertion floats free and its result is discarded.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate can explain that unawaited <code>.then()</code> callbacks with expectations silently swallow assertion failures because the test runner completes before the microtask resolves.</li>
+    <li>The candidate understands that returning a promise is a valid alternative to <code>await</code> — the runner will wait on anything the test function returns — and knows when each style is appropriate.</li>
+    <li>The candidate recognizes that chaining additional <code>.then()</code> calls off a previously-resolved intermediate variable creates a new dangling promise unless the variable is reassigned and the final value is returned.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Floating intercept assertion
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'API response contains correct user data after login'</span>, ({ page }) =&gt; {
+  page.<span class="fn">route</span>(<span class="str">'/api/auth/login'</span>, <span class="kw">async</span> (route) =&gt; {
+    <span class="kw">await</span> route.<span class="fn">fulfill</span>({ json: { userId: <span class="num">42</span>, role: <span class="str">'admin'</span> } });
+  });
+
+<span class="err-line">  page.<span class="fn">goto</span>(<span class="str">'/login'</span>).<span class="fn">then</span>(<span class="kw">async</span> () =&gt; {  <span class="cm">// not awaited or returned</span></span>
+    <span class="kw">await</span> page.<span class="fn">fill</span>(<span class="str">'[data-testid="email"]'</span>, <span class="str">'admin@example.com'</span>);
+    <span class="kw">await</span> page.<span class="fn">fill</span>(<span class="str">'[data-testid="password"]'</span>, <span class="str">'hunter2'</span>);
+    <span class="kw">await</span> page.<span class="fn">click</span>(<span class="str">'[data-testid="submit"]'</span>);
+<span class="err-line">  });</span>
+
+<span class="err-line">  page.<span class="fn">waitForResponse</span>(<span class="str">'/api/auth/login'</span>).<span class="fn">then</span>((response) =&gt; {  <span class="cm">// also not awaited</span></span>
+    <span class="fn">expect</span>(response.<span class="fn">status</span>()).<span class="fn">toBe</span>(<span class="num">200</span>);
+    <span class="fn">expect</span>(response.<span class="fn">json</span>()).<span class="fn">resolves</span>.<span class="fn">toHaveProperty</span>(<span class="str">'role'</span>, <span class="str">'admin'</span>);
+<span class="err-line">  });</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> Neither <code>.then()</code> chain is awaited or returned, so both promises detach from the test lifecycle. The assertions inside the second <code>.then()</code> will never be evaluated — status code mismatches or missing response fields will not cause the test to fail.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Broken reassignment chain
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'form submission triggers confirmation toast'</span>, ({ page }) =&gt; {
+  <span class="kw">const</span> navPromise = page.<span class="fn">goto</span>(<span class="str">'/settings/profile'</span>).<span class="fn">then</span>(<span class="kw">async</span> () =&gt; {
+    <span class="kw">await</span> page.<span class="fn">fill</span>(<span class="str">'[data-testid="display-name"]'</span>, <span class="str">'Jane Doe'</span>);
+    <span class="kw">await</span> page.<span class="fn">click</span>(<span class="str">'[data-testid="save-button"]'</span>);
+  });
+
+<span class="err-line">  navPromise.<span class="fn">then</span>(<span class="kw">async</span> () =&gt; {  <span class="cm">// creates a new promise — not reassigned, not returned</span></span>
+    <span class="kw">const</span> toast = page.<span class="fn">locator</span>(<span class="str">'[data-testid="toast"]'</span>);
+    <span class="kw">await</span> <span class="fn">expect</span>(toast).<span class="fn">toBeVisible</span>();
+    <span class="kw">await</span> <span class="fn">expect</span>(toast).<span class="fn">toContainText</span>(<span class="str">'Profile updated'</span>);
+<span class="err-line">  });</span>
+
+  <span class="kw">return</span> navPromise; <span class="cm">// resolves before the second .then() runs</span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> A second <code>.then()</code> is chained off <code>navPromise</code> but assigned to nothing — it creates a new, separate promise that is never returned. The test returns <code>navPromise</code>, which resolves before the second <code>.then()</code> runs, so the toast assertions execute after the runner has already marked the test as passed.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Full chain awaited with async/await
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'API response contains correct user data after login'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">route</span>(<span class="str">'/api/auth/login'</span>, <span class="kw">async</span> (route) =&gt; {
+    <span class="kw">await</span> route.<span class="fn">fulfill</span>({ json: { userId: <span class="num">42</span>, role: <span class="str">'admin'</span> } });
+  });
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+  <span class="kw">await</span> page.<span class="fn">fill</span>(<span class="str">'[data-testid="email"]'</span>, <span class="str">'admin@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">fill</span>(<span class="str">'[data-testid="password"]'</span>, <span class="str">'hunter2'</span>);
+
+<span class="ok-line">  <span class="kw">const</span> [response] = <span class="kw">await</span> <span class="tp">Promise</span>.<span class="fn">all</span>([</span>
+<span class="ok-line">    page.<span class="fn">waitForResponse</span>(<span class="str">'/api/auth/login'</span>),</span>
+<span class="ok-line">    page.<span class="fn">click</span>(<span class="str">'[data-testid="submit"]'</span>),</span>
+<span class="ok-line">  ]);</span>
+
+  <span class="fn">expect</span>(response.<span class="fn">status</span>()).<span class="fn">toBe</span>(<span class="num">200</span>);
+  <span class="kw">await</span> <span class="fn">expect</span>(response.<span class="fn">json</span>()).<span class="fn">resolves</span>.<span class="fn">toHaveProperty</span>(<span class="str">'role'</span>, <span class="str">'admin'</span>);
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> Every asynchronous operation is awaited directly, so assertions run inside the same synchronous flow that the test runner controls. There are no floating callbacks; any assertion failure immediately rejects the async function and is surfaced as a test failure.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Reassigned chain returned explicitly
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'form submission triggers confirmation toast'</span>, ({ page }) =&gt; {
+<span class="ok-line">  <span class="kw">let</span> chain = page.<span class="fn">goto</span>(<span class="str">'/settings/profile'</span>).<span class="fn">then</span>(<span class="kw">async</span> () =&gt; {</span>
+    <span class="kw">await</span> page.<span class="fn">fill</span>(<span class="str">'[data-testid="display-name"]'</span>, <span class="str">'Jane Doe'</span>);
+    <span class="kw">await</span> page.<span class="fn">click</span>(<span class="str">'[data-testid="save-button"]'</span>);
+<span class="ok-line">  });</span>
+
+<span class="ok-line">  chain = chain.<span class="fn">then</span>(<span class="kw">async</span> () =&gt; {  <span class="cm">// reassigned back to chain</span></span>
+    <span class="kw">const</span> toast = page.<span class="fn">locator</span>(<span class="str">'[data-testid="toast"]'</span>);
+    <span class="kw">await</span> <span class="fn">expect</span>(toast).<span class="fn">toBeVisible</span>();
+    <span class="kw">await</span> <span class="fn">expect</span>(toast).<span class="fn">toContainText</span>(<span class="str">'Profile updated'</span>);
+<span class="ok-line">  });</span>
+
+<span class="ok-line">  <span class="kw">return</span> chain; <span class="cm">// tail of the full sequence — captures all assertion failures</span></span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> Each <code>.then()</code> is immediately reassigned back to <code>chain</code>, so the variable always holds the tail of the promise sequence. Returning <code>chain</code> hands the fully-linked promise to the test runner, which correctly captures any assertion failures anywhere in the chain.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"This test never fails even though the element doesn't exist — why?" <em>(Show a test with <code>page.locator(...).then(el =&gt; expect(el).toBeVisible())</code> that is neither awaited nor returned.)</em></p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>The <code>.then()</code> callback runs as a microtask <em>after</em> the test function has already returned <code>undefined</code>. The runner sees no promise to wait on, marks the test green, and the rejection from <code>toBeVisible()</code> is an unhandled promise rejection that may not even surface in the console depending on Node.js version. The fix is either <code>return</code> the promise or convert to <code>async/await</code>.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often believe that as long as the code inside <code>.then()</code> uses <code>await</code>, the outer promise is automatically tracked by the test runner. They conflate "the inner async work is sequential" with "the outer promise is anchored to the test." The inner <code>await</code> only serializes work within that callback — it does nothing to attach the resulting promise to the runner unless the callback's return value is awaited or returned at the test level.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../no-test-return-statement/reference.html">no-test-return-statement</a>
+    <a class="nav-link" href="../no-action-timeout/reference.html">no-action-timeout →</a>
+  </nav>
+
+</div>
+</body>
+</html>

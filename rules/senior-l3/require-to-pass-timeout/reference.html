@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>require-to-pass-timeout · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Timeout Management</p>
+    <h1>require-to-pass-timeout</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Timeout Management</span>
+      <span class="tag">toPass / expect.poll</span>
+      <span class="tag">Unbounded Retry</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    <code>toPass()</code> is Playwright's mechanism for retrying an async assertion block until it stops throwing. Unlike standard <code>expect</code> matchers that respect the configured <code>expect.timeout</code>, <code>toPass()</code> defaults to a timeout of <code>0</code> — meaning it will retry indefinitely and only stop when the surrounding test's global timeout fires. This makes failure mode unpredictable: a flaky polling assertion can silently consume the entire test budget before the runner kills it, obscuring whether the test failed due to the assertion itself or an unrelated timeout. Explicitly setting <code>timeout</code> on each <code>toPass()</code> call makes the retry window intentional and bounded.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate can explain that <code>toPass()</code> does <strong>not</strong> inherit <code>expect.timeout</code> from playwright config — it is an independent retry mechanism with its own default of <code>0</code>, and that <code>0</code> means "no explicit cap" (not "fail immediately").</li>
+    <li>The candidate understands the practical failure mode: a <code>toPass()</code> without a timeout inflates overall suite duration and makes it impossible to distinguish a slow assertion from a test-level timeout, especially under strict CI time budgets.</li>
+    <li>The candidate knows that <code>timeout</code> and <code>intervals</code> are independent options — passing <code>intervals</code> alone does not satisfy this rule and a senior engineer should be able to explain why.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Polling an API response without a timeout cap
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'order status eventually updates to shipped'</span>, <span class="kw">async</span> ({ page, request }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/orders/ORD-8821'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place Order'</span> }).<span class="fn">click</span>();
+
+  <span class="kw">await</span> <span class="fn">expect</span>(<span class="kw">async</span> () =&gt; {
+    <span class="kw">const</span> res = <span class="kw">await</span> request.<span class="fn">get</span>(<span class="str">'/api/orders/ORD-8821/status'</span>);
+    <span class="kw">const</span> body = <span class="kw">await</span> res.<span class="fn">json</span>();
+    <span class="fn">expect</span>(body.status).<span class="fn">toBe</span>(<span class="str">'shipped'</span>);
+<span class="err-line">  }).<span class="fn">toPass</span>(); <span class="cm">// retries indefinitely — hangs CI if backend never reaches 'shipped'</span></span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> <code>toPass()</code> is called with no options, so it retries indefinitely against the test-level timeout. If the backend never returns <code>'shipped'</code>, the test hangs for the full test timeout rather than failing at a meaningful, intentional boundary.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Passing <code>intervals</code> but omitting <code>timeout</code>
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'notification badge disappears after read'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/dashboard'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'link'</span>, { name: <span class="str">'Notifications'</span> }).<span class="fn">click</span>();
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Mark all as read'</span> }).<span class="fn">click</span>();
+
+  <span class="kw">await</span> <span class="fn">expect</span>(<span class="kw">async</span> () =&gt; {
+    <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'notification-badge'</span>)).<span class="op">not</span>.<span class="fn">toBeVisible</span>();
+<span class="err-line">  }).<span class="fn">toPass</span>({ intervals: [<span class="num">500</span>, <span class="num">1000</span>, <span class="num">2000</span>] }); <span class="cm">// looks intentional — still unbounded</span></span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> Supplying <code>intervals</code> looks intentional and is easy to misread as "configured," but without <code>timeout</code> the assertion still retries indefinitely. <code>intervals</code> only controls the delay between attempts — the total retry window remains unbounded.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Polling an API response with an explicit timeout
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'order status eventually updates to shipped'</span>, <span class="kw">async</span> ({ page, request }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/orders/ORD-8821'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Place Order'</span> }).<span class="fn">click</span>();
+
+  <span class="kw">await</span> <span class="fn">expect</span>(<span class="kw">async</span> () =&gt; {
+    <span class="kw">const</span> res = <span class="kw">await</span> request.<span class="fn">get</span>(<span class="str">'/api/orders/ORD-8821/status'</span>);
+    <span class="kw">const</span> body = <span class="kw">await</span> res.<span class="fn">json</span>();
+    <span class="fn">expect</span>(body.status).<span class="fn">toBe</span>(<span class="str">'shipped'</span>);
+<span class="ok-line">  }).<span class="fn">toPass</span>({ timeout: <span class="num">15_000</span> });</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The <code>timeout: 15_000</code> option gives the assertion a dedicated 15-second window independent of the test's global timeout. If the status has not changed within 15 seconds the assertion fails clearly, leaving the remaining test budget intact and producing a precise failure message.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Combining <code>timeout</code> and <code>intervals</code> for controlled back-off
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'notification badge disappears after read'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/dashboard'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'link'</span>, { name: <span class="str">'Notifications'</span> }).<span class="fn">click</span>();
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Mark all as read'</span> }).<span class="fn">click</span>();
+
+  <span class="kw">await</span> <span class="fn">expect</span>(<span class="kw">async</span> () =&gt; {
+    <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByTestId</span>(<span class="str">'notification-badge'</span>)).<span class="op">not</span>.<span class="fn">toBeVisible</span>();
+<span class="ok-line">  }).<span class="fn">toPass</span>({ timeout: <span class="num">8_000</span>, intervals: [<span class="num">500</span>, <span class="num">1000</span>, <span class="num">2000</span>] });</span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> Both <code>timeout</code> and <code>intervals</code> are specified, so the retry behavior is fully intentional — the assertion gives up after 8 seconds regardless of how many attempts have run, while the back-off schedule avoids hammering the UI on every tick.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"You set <code>expect.timeout</code> to <code>10000</code> in your <code>playwright.config.ts</code>. Does that mean a bare <code>toPass()</code> will time out after 10 seconds?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>No. The Playwright documentation explicitly states that <code>.toPass()</code> does <strong>not</strong> respect the custom <code>expect</code> timeout — it has its own default of <code>0</code>, which means no timeout cap. The config-level <code>expect.timeout</code> only applies to standard matchers like <code>toBeVisible()</code> or <code>toHaveText()</code>. You must pass <code>timeout</code> directly to <code>toPass()</code> every time.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often assume that providing <code>intervals</code> is enough to bound the retry loop, or that <code>toPass()</code> inherits the global expect timeout just like other matchers. They may also confuse <code>timeout: 0</code> with "fail immediately" rather than "no upper bound" — which is the actual behavior.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../no-action-timeout/reference.html">no-action-timeout</a>
+    <a class="nav-link" href="../no-networkidle/reference.html">no-networkidle →</a>
+  </nav>
+
+</div>
+</body>
+</html>

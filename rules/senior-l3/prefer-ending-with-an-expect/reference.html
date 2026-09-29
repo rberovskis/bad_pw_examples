@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>prefer-ending-with-an-expect · L3 Senior</title>
+<link rel="stylesheet" href="../_base.css">
+</head>
+<body>
+<div class="page-wrap">
+
+  <header class="rule-header">
+    <p class="breadcrumb">Playwright SDET Interview · L3 Senior · Assertion Correctness</p>
+    <h1>prefer-ending-with-an-expect</h1>
+    <div class="tags">
+      <span class="tag tier">L3 — Senior</span>
+      <span class="tag">Test Completeness</span>
+      <span class="tag">Assertion Strategy</span>
+      <span class="tag">Actionability vs Correctness</span>
+    </div>
+  </header>
+
+  <div class="why-box">
+    <h2>Why this rule exists</h2>
+    Playwright tests that end with an action (<code>click</code>, <code>fill</code>, <code>goto</code>, etc.) rather than an assertion express no verifiable outcome — the test can pass even when the feature is completely broken, because Playwright will simply execute the action without confirming anything changed. This is especially dangerous because Playwright's auto-waiting resolves on <strong>interaction readiness</strong>, not on post-interaction correctness: a <code>click()</code> that succeeds proves the element was clickable, not that the click produced the expected result.
+  </div>
+
+  <h2 class="section-title">What interviewers look for</h2>
+  <ul class="signals">
+    <li>The candidate distinguishes between Playwright's <strong>auto-waiting</strong> (waits for actionability before an action) and <strong>assertions</strong> (verify state after an action), and explains why auto-waiting alone is insufficient as a correctness check.</li>
+    <li>The candidate can identify subtle action-ending patterns — not just bare <code>page.goto()</code> calls, but cases like <code>page.getByRole('button').click()</code> following an <code>expect</code>, where the expect is present but misplaced as a non-final statement.</li>
+    <li>The candidate knows about the <code>assertFunctionNames</code> and <code>assertFunctionPatterns</code> escape hatches and can explain when a custom assertion helper wrapper is the right solution versus inline <code>expect</code> calls.</li>
+  </ul>
+
+  <h2 class="section-title">Examples</h2>
+  <div class="example-grid">
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — Login flow ending on a click
+        <span class="ex-num">BAD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'user can submit the login form'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>)).<span class="fn">toBeVisible</span>();
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'hunter2'</span>);
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>(); <span class="cm">// no post-submit assertion</span></span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> The test ends on <code>click()</code>, so it only verifies that the button was clickable — it never confirms the login actually succeeded (e.g., redirect to <code>/dashboard</code> or appearance of a welcome message). A regression that breaks the POST handler would not be caught.</div>
+    </div>
+
+    <div class="example-card bad">
+      <div class="card-header">
+        <span class="dot"></span>
+        Bad — API intercept setup with a misplaced assertion
+        <span class="ex-num">BAD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'search results load after query'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">route</span>(<span class="str">'/api/search*'</span>, <span class="kw">async</span> (route) =&gt; {
+    <span class="kw">await</span> route.<span class="fn">fulfill</span>({ json: { results: [{ id: <span class="num">1</span>, title: <span class="str">'Widget'</span> }] } });
+  });
+
+<span class="err-line">  <span class="cm">// expect is present but verifies an intermediate state — not the final outcome</span></span>
+<span class="err-line">  <span class="kw">await</span> <span class="fn">expect</span>(page.<span class="fn">getByRole</span>(<span class="str">'heading'</span>, { name: <span class="str">'Search'</span> })).<span class="fn">toBeVisible</span>();</span>
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/search'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'searchbox'</span>).<span class="fn">fill</span>(<span class="str">'widget'</span>);
+<span class="err-line">  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Search'</span> }).<span class="fn">click</span>(); <span class="cm">// test ends here</span></span>
+});</code></pre></div>
+      <div class="verdict"><strong>What's wrong:</strong> The <code>expect</code> is present but verifies the heading before the search is even triggered. The test ends on the <code>click()</code> that fires the search — there is no assertion that the mocked results actually rendered.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Login flow with a post-submit assertion
+        <span class="ex-num">GOOD 1</span>
+      </div>
+      <div class="code-wrap"><pre><code>test(<span class="str">'user can submit the login form'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/login'</span>);
+
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Email'</span>).<span class="fn">fill</span>(<span class="str">'user@example.com'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByLabel</span>(<span class="str">'Password'</span>).<span class="fn">fill</span>(<span class="str">'hunter2'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Sign in'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">expect</span>(page).<span class="fn">toHaveURL</span>(<span class="str">'/dashboard'</span>); <span class="cm">// observable outcome verified</span></span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The final statement asserts the observable outcome — a URL change to <code>/dashboard</code> — giving the test a real contract. A broken auth handler will now cause the test to fail rather than pass silently.</div>
+    </div>
+
+    <div class="example-card good">
+      <div class="card-header">
+        <span class="dot"></span>
+        Good — Search results verified via a custom assertion helper
+        <span class="ex-num">GOOD 2</span>
+      </div>
+      <div class="code-wrap"><pre><code><span class="kw">import</span> { test } <span class="kw">from</span> <span class="str">'@playwright/test'</span>;
+<span class="kw">import</span> { assertResultCount } <span class="kw">from</span> <span class="str">'../helpers/search-assertions'</span>;
+
+test(<span class="str">'search returns matching products'</span>, <span class="kw">async</span> ({ page }) =&gt; {
+  <span class="kw">await</span> page.<span class="fn">route</span>(<span class="str">'/api/search*'</span>, <span class="kw">async</span> (route) =&gt; {
+    <span class="kw">await</span> route.<span class="fn">fulfill</span>({
+      json: { results: [{ id: <span class="num">1</span>, title: <span class="str">'Widget'</span> }, { id: <span class="num">2</span>, title: <span class="str">'Gadget'</span> }] },
+    });
+  });
+
+  <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'/search'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'searchbox'</span>).<span class="fn">fill</span>(<span class="str">'widget'</span>);
+  <span class="kw">await</span> page.<span class="fn">getByRole</span>(<span class="str">'button'</span>, { name: <span class="str">'Search'</span> }).<span class="fn">click</span>();
+
+<span class="ok-line">  <span class="kw">await</span> <span class="fn">assertResultCount</span>(page, <span class="num">2</span>); <span class="cm">// helper registered via assertFunctionNames option</span></span>
+});</code></pre></div>
+      <div class="verdict"><strong>Why this works:</strong> The custom helper <code>assertResultCount</code> encapsulates a reusable assertion pattern, and the <code>assertFunctionNames</code> ESLint option tells the linter to treat it as an assertion. The test ends on a meaningful check without requiring the helper to be inlined.</div>
+    </div>
+
+  </div>
+
+  <h2 class="section-title">Interview talking points</h2>
+  <div class="tp-section">
+    <div class="tp-item gotcha">
+      <div class="tp-label">Gotcha question</div>
+      <p>"Our test has an <code>expect</code> in the middle of the body and a <code>click()</code> at the end. The <code>expect</code> passes. Why would this rule still flag the test, and is the rule being overly strict here?"</p>
+    </div>
+    <div class="tp-item expected">
+      <div class="tp-label">Expected senior answer</div>
+      <p>The rule flags the test because the <em>final</em> statement is an action, not an assertion — the <code>expect</code> earlier in the body proves something about an intermediate state, not the outcome of the last action. This is not overly strict: every action can produce a side effect, and the only way to confirm that side effect is with an assertion. The fix is to either add an assertion after the <code>click()</code> that verifies its result, or reorder the test so the meaningful assertion comes last.</p>
+    </div>
+    <div class="tp-item misconception">
+      <div class="tp-label">Common misconception</div>
+      <p>Junior/mid candidates often argue that "Playwright's auto-waiting handles this" — believing that if <code>click()</code> resolves without timing out, the feature must be working. This conflates actionability (can I interact with this element?) with correctness (did the interaction produce the right outcome?). Auto-waiting waits for an element to be stable and interactable; it does not verify what happens after the interaction completes.</p>
+    </div>
+  </div>
+
+  <nav class="page-nav">
+    <a class="nav-link home" href="../index.html">← All L3 Rules</a>
+    <a class="nav-link" href="../no-conditional-expect/reference.html">no-conditional-expect</a>
+    <a class="nav-link" href="../prefer-web-first-assertions/reference.html">prefer-web-first-assertions →</a>
+  </nav>
+
+</div>
+</body>
+</html>
